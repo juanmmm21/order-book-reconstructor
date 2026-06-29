@@ -1,35 +1,86 @@
 # order-book-reconstructor
 
-In-memory **L2 order book reconstructor** that maintains sorted bids and asks in real time from exchange depth streams. Second module of the [quant-core-infra](https://github.com/juanmmm21/quant-core-infra) ecosystem, consuming raw WebSocket depth data downstream of `websocket-feed-handler`.
+Reconstructor **L2 en memoria** que mantiene bids y asks ordenados en tiempo real a partir de streams de profundidad de exchanges. Segundo módulo del ecosistema [quant-core-infra](https://github.com/juanmmm21/quant-core-infra).
 
-Repository: [github.com/juanmmm21/order-book-reconstructor](https://github.com/juanmmm21/order-book-reconstructor)
-
----
-
-## Objective
-
-This project demonstrates:
-
-- Classic order book data structures with binary-search insertion (`bisect`)
-- Real-time L2 reconstruction from incremental depth updates
-- Sequence validation for Binance diff depth (`U` / `u` update IDs)
-- REST snapshot bootstrap for correct local book synchronization
-- Exchange-specific adapters (Binance, Coinbase level2)
+Repositorio: [github.com/juanmmm21/order-book-reconstructor](https://github.com/juanmmm21/order-book-reconstructor)
 
 ---
 
-## Supported exchanges
+## Qué es y qué problema resuelve
 
-| Exchange | Stream / Channel | Sync strategy | Symbol format |
-|----------|------------------|---------------|---------------|
-| **Binance** | `<symbol>@depth@100ms` | REST `/api/v3/depth` + diff updates | `BTCUSDT` |
-| **Coinbase** | `level2` channel | WebSocket `snapshot` + `l2update` | `BTC-USD` |
+Un libro de órdenes L2 es la lista de precios y cantidades disponibles en cada nivel de compra y venta. Los exchanges no envían el libro completo en cada mensaje: envían **actualizaciones incrementales** (diffs) que hay que aplicar sobre un snapshot inicial. Si pierdes un mensaje o el orden es incorrecto, el libro local deja de reflejar la realidad.
 
-Binance diff depth protocol: [Binance Spot WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams).
+Este módulo implementa esa reconstrucción con:
+
+- Estructuras ordenadas de baja latencia (`bisect` sobre listas)
+- Validación de secuencia (Binance `U` / `u`)
+- Resincronización automática vía REST cuando hay gaps
+- Vista normalizada `OrderBookView` con best bid/ask, spread y mid price
 
 ---
 
-## Architecture
+## Rol en quant-core-infra
+
+```text
+websocket-feed-handler (trades)     order-book-reconstructor (depth L2)
+         │                                      │
+         └──────────► market-data-lakehouse ◄────┘
+                              │
+                    alpha-signal-generator (imbalance)
+                              │
+                    market-condition-simulator (slippage)
+```
+
+Complementa a `websocket-feed-handler`: ese módulo ingiere **trades**; este ingiere **profundidad** y expone liquidez para estrategias y simulación de slippage.
+
+---
+
+## Objetivo
+
+Demuestra:
+
+- Estructuras clásicas de order book con inserción O(log n)
+- Reconstrucción L2 en tiempo real desde diffs
+- Validación de secuencia Binance (`U <= lastUpdateId + 1 <= u`)
+- Bootstrap REST para sincronización correcta
+- Adapters desacoplados por exchange
+
+---
+
+## Cómo funciona
+
+### Binance (diff depth)
+
+1. Se abre WebSocket `<symbol>@depth@100ms`.
+2. Se descarga snapshot REST (`/api/v3/depth`) con `lastUpdateId`.
+3. Se descartan diffs con `u <= lastUpdateId` (obsoletos).
+4. El primer diff válido debe cumplir `U <= lastUpdateId + 1 <= u`.
+5. Cada diff actualiza niveles: cantidad `0` elimina el nivel.
+6. Si la secuencia se rompe → **resync**: nuevo snapshot REST y reinicio del buffer.
+
+### Coinbase (level2)
+
+1. Se suscribe al canal `level2`.
+2. El primer mensaje es un `snapshot` completo.
+3. Los `l2update` posteriores modifican niveles individuales.
+4. No requiere REST; la sincronización es por snapshot WebSocket.
+
+En ambos casos el resultado es un `OrderBookView` con los N mejores niveles configurados.
+
+---
+
+## Exchanges soportados
+
+| Exchange | Stream | Estrategia de sync | Símbolo |
+|----------|--------|-------------------|---------|
+| **Binance** | `@depth@100ms` | REST snapshot + diffs | `BTCUSDT` |
+| **Coinbase** | `level2` | WS snapshot + `l2update` | `BTC-USD` |
+
+Protocolo Binance: [Binance Spot WebSocket Streams](https://developers.binance.com/docs/binance-spot-api-docs/web-socket-streams).
+
+---
+
+## Arquitectura
 
 ```text
 ┌─────────────────────┐
@@ -38,44 +89,75 @@ Binance diff depth protocol: [Binance Spot WebSocket Streams](https://developers
            │ OrderBookView
            ▼
 ┌─────────────────────┐
-│ LiveOrderBookService│  reconnect + resync on sequence gap
+│ LiveOrderBookService│  reconnect + resync on gap
 └──────────┬──────────┘
            │
      ┌─────┴──────┐
      ▼            ▼
 ┌──────────┐  ┌─────────────────────┐
 │ Snapshot │  │ OrderBookReconstructor │
-│ Provider │  │  ├─ SortedBookSide (bids)
-└──────────┘  │  └─ SortedBookSide (asks)
+│ Provider │  │  ├─ SortedBookSide (bids ↓)
+└──────────┘  │  └─ SortedBookSide (asks ↑)
               └─────────────────────┘
 ```
 
-### Core components
+### Componentes
 
-| Module | Responsibility |
-|--------|----------------|
-| `book_side.py` | Sorted bid/ask side with O(log n) insertion via `bisect` |
-| `reconstructor.py` | Applies snapshots/updates and builds `OrderBookView` |
-| `snapshot.py` | Binance REST snapshot fetcher (`httpx`) |
-| `feed_service.py` | Async WebSocket consumer with resync logic |
-| `exchanges/` | Depth parsers and adapters per exchange |
+| Módulo | Responsabilidad |
+|--------|-----------------|
+| `book_side.py` | Lado del libro ordenado con `bisect` |
+| `reconstructor.py` | Aplica snapshots/diffs, valida secuencia |
+| `snapshot.py` | Fetch REST Binance (`httpx`) |
+| `feed_service.py` | Consumidor WS async con lógica de resync |
+| `exchanges/` | Parsers y adapters por exchange |
 
-### Technical decisions
+### Decisiones técnicas
 
-- **Decimal precision** for all prices and quantities
-- **Bids descending, asks ascending** for O(1) best price access
-- **Binance sequence tracker** enforces `U <= lastUpdateId + 1 <= u`
-- **Auto-resync** on sequence gaps by reloading REST snapshot
+- **Decimal** en todos los precios y cantidades
+- **Bids descendente, asks ascendente** → best price en O(1)
+- **Auto-resync** en gaps de secuencia Binance
+- **Reconexión** con la misma política de backoff que el feed handler
 
 ---
 
-## Requirements
+## Modelo de datos: `OrderBookView`
+
+| Campo | Descripción |
+|-------|-------------|
+| `bids` / `asks` | Tuplas `PriceLevel(price, quantity)` ordenadas |
+| `best_bid` / `best_ask` | Mejor precio de cada lado |
+| `spread` | `best_ask - best_bid` |
+| `mid_price` | Punto medio del spread |
+| `last_update_id` | ID de secuencia (Binance) |
+| `event_time` | Timestamp del último evento aplicado |
+
+Métricas derivadas (para `alpha-signal-generator` y `market-condition-simulator`):
+
+```json
+{
+  "symbol": "BTCUSDT",
+  "best_bid": "100.4",
+  "best_ask": "100.6",
+  "spread": "0.2",
+  "mid_price": "100.5",
+  "bid_depth": "12.5",
+  "ask_depth": "8.0",
+  "imbalance": 0.22,
+  "event_time": "2024-01-01T12:00:00Z"
+}
+```
+
+`imbalance = (bid_depth - ask_depth) / (bid_depth + ask_depth)`
+
+---
+
+## Requisitos
 
 - Python **3.11+**
 
 ---
 
-## Installation
+## Instalación
 
 ```bash
 cd order-book-reconstructor
@@ -86,21 +168,17 @@ pip install -e ".[dev]"
 
 ---
 
-## CLI usage
-
-### Binance
+## Uso CLI
 
 ```bash
+# Binance
 order-book-reconstructor --exchange binance --symbols BTCUSDT --top-levels 10
-```
 
-### Coinbase
-
-```bash
+# Coinbase
 order-book-reconstructor --exchange coinbase --symbols BTC-USD --top-levels 10
 ```
 
-Example output:
+Salida esperada:
 
 ```text
 book exchange=binance symbol=BTCUSDT bid=67234.50 ask=67234.51 spread=0.01 levels=10/10
@@ -108,7 +186,7 @@ book exchange=binance symbol=BTCUSDT bid=67234.50 ask=67234.51 spread=0.01 level
 
 ---
 
-## Programmatic usage
+## Uso programático
 
 ```python
 import asyncio
@@ -139,7 +217,7 @@ if __name__ == "__main__":
 
 ---
 
-## Development
+## Desarrollo
 
 ```bash
 pytest -q
@@ -149,16 +227,14 @@ mypy src
 
 ---
 
-## Ecosystem integration
+## Roadmap
 
-```text
-websocket-feed-handler → order-book-reconstructor → market-data-lakehouse
-                              │
-                              └── sorted L2 book views
-```
+- [ ] Soporte depth `@1000ms` y configuración dinámica
+- [ ] Export JSONL de métricas de libro para backtest offline
+- [ ] Métricas de drift entre libro local y ticker mid
 
 ---
 
-## License
+## Licencia
 
 MIT
