@@ -57,6 +57,9 @@ class DepthSynchronizer:
         self._max_buffer = max_buffer
         self._state = SyncState.AWAITING_SNAPSHOT
         self._last_final_id: int | None = None
+        # True right after a snapshot that no buffered diff bridged yet: the next diff may
+        # straddle it (U <= lastUpdateId + 1 <= u) instead of starting exactly at +1.
+        self._awaiting_bridge = False
         self.stats = SyncStats()
 
     @property
@@ -90,7 +93,9 @@ class DepthSynchronizer:
         if update.final_update_id <= self._last_final_id:
             self.stats.stale += 1
             return DiffOutcome.STALE
-        if update.first_update_id != self._last_final_id + 1:
+        expected = self._last_final_id + 1
+        bridges = self._awaiting_bridge and update.first_update_id <= expected
+        if update.first_update_id != expected and not bridges:
             self._enter_gap(update)
             return DiffOutcome.GAP
         self._apply(update)
@@ -122,6 +127,7 @@ class DepthSynchronizer:
         self._state = SyncState.SYNCED
         pending = list(self._buffer)
         self._buffer.clear()
+        self._awaiting_bridge = True
         if pending:
             # The first diff may straddle the snapshot (U <= lastUpdateId + 1 <= u); checked
             # above, so it is applied as is and strict continuity starts from its u.
@@ -132,6 +138,7 @@ class DepthSynchronizer:
         return DiffOutcome.GAP not in outcomes
 
     def _apply(self, update: DepthUpdate) -> None:
+        self._awaiting_bridge = False
         self._book.apply_unchecked(update)
         assert update.final_update_id is not None
         self._last_final_id = update.final_update_id
