@@ -22,6 +22,7 @@ from order_book_reconstructor.models import (
 from order_book_reconstructor.protocols import (
     BookViewHandler,
     ConnectionEventHandler,
+    DepthMessageParser,
     UpdateResultHandler,
 )
 from order_book_reconstructor.reconnect import compute_backoff_delay
@@ -240,7 +241,7 @@ class LiveOrderBookService:
 
     def _parse_message(
         self,
-        parser: object,
+        parser: DepthMessageParser,
         raw_message: str | bytes,
     ) -> BookSnapshot | DepthUpdate | None:
         decoded = raw_message.decode("utf-8") if isinstance(raw_message, bytes) else raw_message
@@ -248,8 +249,7 @@ class LiveOrderBookService:
         if not isinstance(payload, dict):
             return None
         normalized = self._adapter.unwrap_payload(payload)
-        parsed = parser.parse(normalized)  # type: ignore[attr-defined]
-        return parsed
+        return parser.parse(normalized)
 
     async def _publish_view(self, view: OrderBookView, handler: BookViewHandler) -> None:
         try:
