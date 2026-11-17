@@ -83,6 +83,14 @@ def test_gap_triggers_resync_and_keeps_later_diffs() -> None:
     assert sync.stats.resyncs == 1
 
 
+def test_snapshot_newer_than_buffer_bridges_with_the_next_diff() -> None:
+    sync = _sync()
+    sync.on_diff(_diff(1, 5, {100: 1}, {}))
+    assert sync.on_snapshot(_snapshot(8, {100: 2}, {}))  # everything buffered is stale
+    assert sync.on_diff(_diff(6, 10, {100: 3}, {})) is DiffOutcome.APPLIED  # straddles 8
+    assert sync.on_diff(_diff(12, 12, {100: 4}, {})) is DiffOutcome.GAP  # strict again
+
+
 def test_stale_diffs_after_sync_are_ignored() -> None:
     sync = _sync()
     sync.on_snapshot(_snapshot(10, {100: 1}, {}))
