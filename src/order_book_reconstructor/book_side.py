@@ -7,12 +7,18 @@ from order_book_reconstructor.models import BookSide, PriceLevel
 
 
 class SortedBookSide:
-    """Lado del libro mantenido ordenado con inserción binaria para latencia mínima."""
+    """Lado del libro mantenido ordenado con inserción binaria para latencia mínima.
+
+    ``_ranks`` holds the sort keys (``-price`` for bids, ``price`` for asks) next to
+    ``_prices`` so that locating a level is a single O(log n) bisect, not a rebuild of the
+    key list on every update.
+    """
 
     def __init__(self, side: BookSide) -> None:
         self._side = side
         self._quantities: dict[Decimal, Decimal] = {}
         self._prices: list[Decimal] = []
+        self._ranks: list[Decimal] = []
 
     @property
     def side(self) -> BookSide:
@@ -27,11 +33,10 @@ class SortedBookSide:
     def clear(self) -> None:
         self._quantities.clear()
         self._prices.clear()
+        self._ranks.clear()
 
     def _locate_insert_index(self, price: Decimal) -> int:
-        target_rank = self._rank(price)
-        ranks = [self._rank(existing_price) for existing_price in self._prices]
-        return bisect.bisect_left(ranks, target_rank)
+        return bisect.bisect_left(self._ranks, self._rank(price))
 
     def upsert(self, price: Decimal, quantity: Decimal) -> None:
         if quantity < Decimal("0"):
@@ -46,6 +51,7 @@ class SortedBookSide:
 
         index = self._locate_insert_index(price)
         self._prices.insert(index, price)
+        self._ranks.insert(index, self._rank(price))
         self._quantities[price] = quantity
 
     def remove(self, price: Decimal) -> None:
@@ -55,6 +61,7 @@ class SortedBookSide:
         index = self._locate_insert_index(price)
         if index < len(self._prices) and self._prices[index] == price:
             self._prices.pop(index)
+            self._ranks.pop(index)
 
     def get(self, price: Decimal) -> Decimal | None:
         return self._quantities.get(price)
