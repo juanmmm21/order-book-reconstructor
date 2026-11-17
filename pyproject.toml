@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "order-book-reconstructor"
-version = "0.1.0"
+version = "0.2.0"
 description = "In-memory L2 order book reconstructor with sorted bid/ask maintenance for live exchange depth streams."
 readme = "README.md"
 requires-python = ">=3.11"
