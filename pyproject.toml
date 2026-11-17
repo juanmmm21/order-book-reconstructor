@@ -34,8 +34,15 @@ dev = [
     "ruff>=0.4",
 ]
 
+rust = [
+    "order-book-reconstructor-rs @ git+https://github.com/juanmmm21/order-book-reconstructor@feat/quant-roadmap#subdirectory=rust",
+]
+
 [project.scripts]
 order-book-reconstructor = "order_book_reconstructor.__main__:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/order_book_reconstructor"]
@@ -52,6 +59,10 @@ python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["order_book_reconstructor_rs"]
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100
