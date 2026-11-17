@@ -108,7 +108,7 @@ class LiveOrderBookService:
                 break
 
             self._state = ConnectionState.RECONNECTING
-            delay = compute_backoff_delay(attempt, self._config.reconnect_policy)
+            delay = compute_backoff_delay(max(attempt, 1), self._config.reconnect_policy)
             await self._emit_connection_event(
                 on_connection_event,
                 "reconnecting",
