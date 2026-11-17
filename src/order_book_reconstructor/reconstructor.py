@@ -114,6 +114,20 @@ class OrderBookReconstructor:
         self._last_event_time = update.event_time
         return UpdateApplyResult.APPLIED
 
+    def apply_unchecked(self, update: DepthUpdate) -> None:
+        """Apply level changes whose ordering was already validated (``DepthSynchronizer``)."""
+        self._apply_side_changes(self._bids, update.bids)
+        self._apply_side_changes(self._asks, update.asks)
+        self._sequence.commit(update)
+        self._last_event_time = update.event_time
+
+    def levels(self, side: BookSide) -> dict[Decimal, Decimal]:
+        """Copy of every level on one side (price -> quantity)."""
+        book_side = self._bids if side is BookSide.BID else self._asks
+        if not len(book_side):
+            return {}
+        return {level.price: level.quantity for level in book_side.top_levels(len(book_side))}
+
     def view(self, depth: int) -> OrderBookView:
         best_bid = self._bids.best()
         best_ask = self._asks.best()
