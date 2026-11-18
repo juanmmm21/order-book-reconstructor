@@ -108,7 +108,64 @@ async def _run_service(
         await asyncio.gather(service_task, return_exceptions=True)
 
 
+def build_replay_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="order-book-reconstructor replay",
+        description="Valida diffs Binance grabados (secuencia, resync) y emite un flujo L2.",
+    )
+    parser.add_argument("--input", nargs="+", required=True, help="JSONL grabados (mezclados).")
+    parser.add_argument("--symbol", required=True)
+    parser.add_argument("--output", default=None, help="Flujo validado JSONL para el simulador.")
+    parser.add_argument("--report", default=None, help="Informe JSON (por defecto stdout).")
+    parser.add_argument("--emit-levels", type=int, default=1000)
+    parser.add_argument("--verify-depth", type=int, default=200)
+    parser.add_argument(
+        "--drop-diff-every",
+        type=int,
+        default=0,
+        help="Borra 1 de cada N diffs para ejercitar la resincronización.",
+    )
+    return parser
+
+
+def replay_main(argv: Sequence[str]) -> None:
+    import json
+
+    from order_book_reconstructor.replay import read_jsonl, replay
+
+    args = build_replay_parser().parse_args(argv)
+    sink = open(args.output, "w", encoding="utf-8") if args.output else None  # noqa: SIM115
+
+    def write(record: dict[str, object]) -> None:
+        if sink is not None:
+            sink.write(json.dumps(record) + "\n")
+
+    try:
+        report = replay(
+            read_jsonl(args.input),
+            symbol=args.symbol.upper(),
+            emit=write if sink else None,
+            emit_levels=args.emit_levels,
+            verify_depth=args.verify_depth,
+            drop_diff_every=args.drop_diff_every,
+        )
+    finally:
+        if sink is not None:
+            sink.close()
+    rendered = json.dumps(report.as_dict(), indent=2)
+    if args.report:
+        with open(args.report, "w", encoding="utf-8") as handle:
+            handle.write(rendered + "\n")
+    else:
+        print(rendered)
+
+
 def main() -> None:
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "replay":
+        replay_main(sys.argv[2:])
+        return
     args = build_parser().parse_args()
     logging.basicConfig(
         level=getattr(logging, args.log_level),

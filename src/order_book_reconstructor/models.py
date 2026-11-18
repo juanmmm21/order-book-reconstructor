@@ -116,6 +116,9 @@ class BookFeedConfig:
     ping_timeout_seconds: float = 20.0
     close_timeout_seconds: float = 10.0
     top_levels: int = 10
+    websocket_base_url: str | None = None
+    rest_base_url: str | None = None
+    snapshot_limit: int = 1000
 
     def __post_init__(self) -> None:
         if not self.symbols:

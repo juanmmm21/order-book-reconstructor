@@ -10,8 +10,10 @@ class BinanceBookAdapter:
     exchange_id = ExchangeId.BINANCE.value
 
     def build_websocket_url(self, config: BookFeedConfig, symbol: str) -> str:
-        stream = f"{_normalize_binance_symbol(symbol)}@depth@{config.depth_speed_ms}ms"
-        return f"wss://stream.binance.com:9443/ws/{stream}"
+        suffix = "@100ms" if config.depth_speed_ms == 100 else ""
+        stream = f"{_normalize_binance_symbol(symbol)}@depth{suffix}"
+        base = (config.websocket_base_url or "wss://stream.binance.com:9443").rstrip("/")
+        return f"{base}/ws/{stream}"
 
     def build_subscribe_messages(
         self,

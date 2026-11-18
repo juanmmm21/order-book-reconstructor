@@ -51,12 +51,22 @@ Demonstrates:
 
 ### Binance (diff depth)
 
-1. A WebSocket `<symbol>@depth@100ms` is opened.
-2. A REST snapshot (`/api/v3/depth`) with `lastUpdateId` is downloaded.
-3. Diffs with `u <= lastUpdateId` (stale) are discarded.
-4. The first valid diff must satisfy `U <= lastUpdateId + 1 <= u`.
-5. Each diff updates levels: quantity `0` removes the level.
-6. If the sequence breaks → **resync**: a new REST snapshot and buffer restart.
+`DepthSynchronizer` (`sync.py`) is a pure state machine shared by the live service and the
+offline replay:
+
+1. A WebSocket `<symbol>@depth@100ms` is opened **first** and diffs are **buffered**.
+2. A REST snapshot (`/api/v3/depth`) with `lastUpdateId` is downloaded while the buffer fills.
+3. Buffered diffs with `u <= lastUpdateId` (stale) are discarded.
+4. The first applied diff must satisfy `U <= lastUpdateId + 1 <= u` (it may straddle the snapshot,
+   also when the snapshot is newer than everything buffered).
+5. From then on every diff must start **exactly** at the previous `u + 1`; quantity `0` removes
+   the level.
+6. Any other `U` is a **gap**: missing ids are counted, the book goes back to step 1 (buffer +
+   new snapshot) and later diffs are kept, not dropped. A snapshot older than the buffer is
+   rejected and another one is requested.
+
+Until v0.1 the live service fetched the snapshot *before* opening the socket, so the diffs in
+between were lost and the first update always looked like a gap; that is fixed.
 
 ### Coinbase (level2)
 
@@ -120,6 +130,37 @@ Binance protocol: [Binance Spot WebSocket Streams](https://developers.binance.co
 
 ---
 
+## Offline replay and verification
+
+`order-book-reconstructor replay` runs the same synchroniser over a recording (JSONL from
+`websocket-feed-handler --channels trade depth`, or `market-data-lakehouse export-depth`) and:
+
+- reports applied / stale diffs, gaps, missing update ids, resyncs and rejected snapshots;
+- **verifies** the book against every REST snapshot in the recording: just before applying the
+  diff whose `[U, u]` contains the snapshot's `lastUpdateId`, every price level that diff does
+  not touch must match the snapshot exactly (top `--verify-depth` levels per side);
+- writes a validated stream (`--output`) for `market-condition-simulator`: `book_snapshot` after
+  each (re)sync, `book_diff` per applied diff, `book_gap` on breaks and trades tagged
+  `book_synced`;
+- `--drop-diff-every N` deletes diffs on purpose to exercise resynchronisation on real data.
+
+```bash
+order-book-reconstructor replay --input depth.jsonl --symbol BTCUSDT --output book.jsonl
+```
+
+Measured on 2026-11-17, BTCUSDT from `data-stream.binance.vision` (6.5 min: 3,856 diffs,
+10,070 trades, 2 REST snapshots): 3,462 diffs applied, 394 stale (pre-snapshot), 0 gaps;
+739/739 verified levels matched. With `--drop-diff-every 500`: 2 gaps detected and 2 resyncs.
+Larger runs are in the quant-terminal-web PR.
+
+### Level updates in O(log n)
+
+`SortedBookSide` used to rebuild the whole list of sort keys on every insert/remove. The keys now
+live in a list next to the prices, so a lookup is one `bisect`. On a 4-vCPU Linux x86_64
+container, 20,000 random inserts + 10,000 removes on one side went from **38.97 s to 0.37 s**.
+
+---
+
 ## Data model: `OrderBookView`
 
 | Field | Description |
@@ -148,6 +189,39 @@ Derived metrics (for `alpha-signal-generator` and `market-condition-simulator`):
 ```
 
 `imbalance = (bid_depth - ask_depth) / (bid_depth + ask_depth)`
+
+---
+
+## Optional Rust accelerator (v0.2.0)
+
+`order_book_reconstructor.fast.FastOrderBook` applies snapshots and diffs with the same
+sequence rules as `DepthSynchronizer` on string levels; with the accelerator the levels live in a
+Rust `BTreeMap` keyed by `rust_decimal` (numeric keys: `"100.0"` and `"100.00"` are one level).
+
+`rust/` holds a PyO3 extension built with maturin. It is **optional**: without it the package
+uses the pure-Python implementation of the same functions (`fast.py`), and
+`QUANT_DISABLE_RUST=1` forces Python even when it is installed.
+
+- **Identical results**: both implementations accept the same grammar (decimal strings
+  `^\d{1,15}(\.\d{1,12})?$`, 64-bit integer ids) and fail the same way. Hypothesis property tests
+  (`tests/test_fast_parity.py`) feed both random valid and malformed inputs and require the same
+  output or the same `ValueError`, and compare them with the original `Decimal` implementation.
+- **Strings end to end**: decimal fields stay as the exchange's text until the caller needs a
+  `Decimal`, which is where most of the Python time went.
+- **Wheels**: `.github/workflows/wheels.yml` builds abi3 wheels (Python ≥ 3.11) for Linux x86_64
+  (manylinux) and macOS arm64, smoke-tests each one against the Python fallback and uploads them
+  as artifacts. `ci.yml` runs the whole suite with and without the accelerator, plus
+  `cargo fmt`, `clippy -D warnings` and `cargo test`.
+
+```bash
+pip install ./rust            # needs a Rust toolchain; or install a wheel from the CI artifacts
+python -c "import order_book_reconstructor.fast as f; print(f.BACKEND)"   # rust | python
+```
+
+Measured end to end in quant-terminal-web (`scripts/latency_bench.py`, 25,589 recorded BTCUSDT
+depth diffs, 2026-11-17, 4-vCPU Linux x86_64 container, Python 3.12): tick-to-decision p50
+131 µs → 15.5 µs and p99 3.70 ms → 166 µs versus the v0.1 Decimal path, with the same decision
+on every message.
 
 ---
 
@@ -230,6 +304,7 @@ mypy src
 ## Roadmap
 
 - [ ] Support for `@1000ms` depth and dynamic configuration
+- [x] Offline replay with verification against REST snapshots (v0.2.0)
 - [ ] JSONL export of book metrics for offline backtesting
 - [ ] Drift metrics between local book and ticker mid
 

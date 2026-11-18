@@ -11,13 +11,17 @@ from order_book_reconstructor.protocols import SnapshotProvider
 logger = logging.getLogger(__name__)
 
 
+# Public market-data endpoint (no keys, no trading); api.binance.com works too where allowed.
+DEFAULT_BINANCE_REST_URL = "https://data-api.binance.vision"
+
+
 class BinanceSnapshotProvider:
     """Obtiene snapshot REST requerido para sincronizar diff depth de Binance."""
 
     def __init__(
         self,
         *,
-        base_url: str = "https://api.binance.com",
+        base_url: str = DEFAULT_BINANCE_REST_URL,
         limit: int = 1000,
         timeout_seconds: float = 10.0,
     ) -> None:
@@ -47,7 +51,12 @@ class BinanceSnapshotProvider:
         return parse_binance_rest_snapshot(normalized, payload)
 
 
-def create_snapshot_provider(exchange: ExchangeId) -> SnapshotProvider | None:
+def create_snapshot_provider(
+    exchange: ExchangeId,
+    *,
+    base_url: str | None = None,
+    limit: int = 1000,
+) -> SnapshotProvider | None:
     if exchange == ExchangeId.BINANCE:
-        return BinanceSnapshotProvider()
+        return BinanceSnapshotProvider(base_url=base_url or DEFAULT_BINANCE_REST_URL, limit=limit)
     return None

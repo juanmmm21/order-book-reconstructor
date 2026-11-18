@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "order-book-reconstructor"
-version = "0.1.0"
+version = "0.2.0"
 description = "In-memory L2 order book reconstructor with sorted bid/ask maintenance for live exchange depth streams."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -30,11 +30,19 @@ dev = [
     "mypy>=1.8",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "hypothesis>=6.100",
     "ruff>=0.4",
+]
+
+rust = [
+    "order-book-reconstructor-rs @ git+https://github.com/juanmmm21/order-book-reconstructor@v0.2.0#subdirectory=rust",
 ]
 
 [project.scripts]
 order-book-reconstructor = "order_book_reconstructor.__main__:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/order_book_reconstructor"]
@@ -51,6 +59,10 @@ python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = ["order_book_reconstructor_rs"]
+ignore_missing_imports = true
 
 [tool.ruff]
 line-length = 100
