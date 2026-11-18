@@ -35,7 +35,7 @@ dev = [
 ]
 
 rust = [
-    "order-book-reconstructor-rs @ git+https://github.com/juanmmm21/order-book-reconstructor@feat/quant-roadmap#subdirectory=rust",
+    "order-book-reconstructor-rs @ git+https://github.com/juanmmm21/order-book-reconstructor@v0.2.0#subdirectory=rust",
 ]
 
 [project.scripts]
